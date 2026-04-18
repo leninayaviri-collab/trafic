@@ -1,0 +1,554 @@
+import sys
+from kivy.app import App
+from kivy.uix.button import Button
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.screenmanager import ScreenManager, Screen, NoTransition
+from kivy.graphics import Rectangle, Color, Line
+from kivy.metrics import dp
+from kivy.clock import Clock
+from kivy.uix.widget import Widget
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.gridlayout import GridLayout
+from kivy.utils import platform
+
+if platform == 'android':
+    from jnius import autoclass, cast
+
+# --- 1. FUNCIÓN FÁBRICA DE BOTONES ---
+def crear_boton(texto, color=(1, 1, 1, 1), accion=None):
+    btn = Button(
+        text=texto,
+        background_color=color,
+        background_normal='',
+        size_hint=(1, 1),
+        bold=True,
+        font_size='16sp'
+    )
+    if accion:
+        btn.bind(on_press=accion)
+    return btn
+
+# --- 2. LAYOUT CON FONDO ---
+class FondoLayout(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            self.rect = Rectangle(
+                source="fondo.jpg",
+                size=self.size,
+                pos=self.pos
+            )
+        self.bind(size=self._actualizar_fondo, pos=self._actualizar_fondo)
+
+    def _actualizar_fondo(self, *args):
+        self.rect.size = self.size
+        self.rect.pos = self.pos
+
+# --- 3. BARRA DE NAVEGACIÓN SUPERIOR (TABS) ---
+class BarraSuperior(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'horizontal'
+        self.size_hint_y = None
+        self.height = dp(50)
+        self.spacing = dp(2)
+
+        self.add_widget(crear_boton("CONTADOR", (0.8, 0, 0, 1), lambda x: self.ir_a("principal")))
+        self.add_widget(crear_boton(" IDA", (1, 0.5, 0, 1), lambda x: self.ir_a("pantalla2")))
+        self.add_widget(crear_boton("VUELTA", (0.2, 0.2, 0.8, 1), lambda x: self.ir_a("pantalla3")))
+        self.add_widget(crear_boton("REGISTRO", (0, 0.6, 0.2, 1), lambda x: self.ir_a("registro")))
+
+    def ir_a(self, nombre):
+        App.get_running_app().root.current = nombre
+
+# --- 4. CLASE BASE PARA PANTALLAS ---
+class PantallaBase(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.main_layout = FondoLayout(orientation='vertical')
+        self.main_layout.add_widget(BarraSuperior())
+        
+        self.contenido = BoxLayout(orientation='vertical', padding=dp(10), spacing=dp(10))
+        self.main_layout.add_widget(self.contenido)
+        self.add_widget(self.main_layout)
+
+class LabelConFondo(Label):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        with self.canvas.before:
+            Color(1, 1, 1, 1)
+            self.rect = Rectangle(size=self.size, pos=self.pos)
+        self.bind(size=self._actualizar, pos=self._actualizar)
+        
+    def _actualizar(self, *args):
+        self.rect.size = self.size
+        self.rect.pos = self.pos 
+
+# --- WIDGET GRÁFICO (EJE X/Y) ---
+class GraficoEvolucion(Widget):
+    def __init__(self, nombre_contador, **kwargs):
+        super().__init__(**kwargs)
+        self.nombre_contador = nombre_contador
+        self.max_y = 800
+        self.horas = ["7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+        self.paso_y = 100
+        self.bind(pos=self.actualizar_grafico, size=self.actualizar_grafico)
+        self.puntos_grafico = []
+        
+        # Labels estáticos del eje Y
+        self.labels_y = []
+        for v in range(0, self.max_y + 1, self.paso_y):
+            lbl = Label(text=str(v), font_size='12sp', color=(1,1,1,1), size_hint=(None, None), size=(dp(30), dp(20)))
+            self.labels_y.append((v, lbl))
+            self.add_widget(lbl)
+            
+        # Labels estáticos del eje X
+        self.labels_x = []
+        for h in self.horas:
+            lbl = Label(text=h, font_size='12sp', color=(1,1,1,1), size_hint=(None, None), size=(dp(20), dp(20)))
+            self.labels_x.append(lbl)
+            self.add_widget(lbl)
+
+    def actualizar_grafico(self, *args):
+        self.canvas.before.clear()
+        self.canvas.after.clear()
+        
+        margen_izq = dp(40)
+        margen_inf = dp(30)
+        margen_sup = dp(20)
+        margen_der = dp(20)
+        
+        w = max(1, self.width - margen_izq - margen_der)
+        h = max(1, self.height - margen_inf - margen_sup)
+        
+        # Reposicionar Labels Y
+        for val, lbl in self.labels_y:
+            y_pos = self.y + margen_inf + (val / self.max_y) * h
+            lbl.pos = (self.x + 2, y_pos - lbl.height / 2)
+            
+        # Reposicionar Labels X
+        n_horas = len(self.horas)
+        for i, lbl in enumerate(self.labels_x):
+            x_pos = self.x + margen_izq + (i / max(1, n_horas - 1)) * w
+            lbl.pos = (x_pos - lbl.width / 2, self.y + 2)
+        
+        with self.canvas.before:
+            Color(0, 0, 0, 0.5)
+            Rectangle(pos=(self.x + margen_izq, self.y + margen_inf), size=(w, h))
+            
+            Color(1, 1, 1, 0.5)
+            Line(points=[self.x + margen_izq, self.y + margen_inf, self.x + margen_izq, self.y + self.height - margen_sup], width=1)
+            Line(points=[self.x + margen_izq, self.y + margen_inf, self.x + self.width - margen_der, self.y + margen_inf], width=1)
+            
+            Color(1, 1, 1, 0.2)
+            for val, _ in self.labels_y:
+                y_pos = self.y + margen_inf + (val / self.max_y) * h
+                Line(points=[self.x + margen_izq, y_pos, self.x + self.width - margen_der, y_pos], width=1)
+                
+            for i in range(n_horas):
+                x_pos = self.x + margen_izq + (i / max(1, n_horas - 1)) * w
+                Line(points=[x_pos, self.y + margen_inf, x_pos, self.y + self.height - margen_sup], width=1)
+
+        app = App.get_running_app()
+        if not app:
+            return
+            
+        historial = app.obtener_historial(self.nombre_contador)
+        if not historial:
+            return
+
+        duracion_total_segundos = 12 * 3600 
+        puntos = []
+        for t_seg, val in historial:
+            capped_val = min(val, self.max_y)
+            x_pos = self.x + margen_izq + (min(t_seg, duracion_total_segundos) / duracion_total_segundos) * w
+            y_pos = self.y + margen_inf + (capped_val / self.max_y) * h
+            puntos.extend([x_pos, y_pos])
+            
+        if len(puntos) >= 4:
+            with self.canvas.after:
+                Color(0, 1, 0, 1)
+                Line(points=puntos, width=2)
+                
+# --- 5. LAS PANTALLAS ---
+class PantallaPrincipal(PantallaBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.contenido.add_widget(
+            LabelConFondo(
+                text="CONTADORES PRINCIPALES",
+                font_size='20sp',
+                size_hint_y=None,
+                bold=True,
+                height=dp(40),
+                color=(1, 0, 0, 1)))
+        
+        app = App.get_running_app()
+        
+        columna = BoxLayout(orientation='vertical', spacing=dp(15) , padding=dp(20))
+        
+        columna.add_widget(Label(text="DE VUELTA", font_size='24sp', color=(1, 1, 1, 1), bold=True))
+        columna.add_widget(app.crear_contador("DE VUELTA"))
+        
+        columna.add_widget(Widget(size_hint_y=None, height=dp(40)))
+        
+        columna.add_widget(Label(text="DE IDA", font_size='24sp', color=(1, 1, 1, 1), bold=True))
+        columna.add_widget(app.crear_contador("DE IDA"))
+
+        columna.add_widget(Widget(size_hint_y=0.1))
+        
+        self.contenido.add_widget(columna)
+
+        btn_reset_contadores = crear_boton("Reset Contadores", (0.8, 0.2, 0.2, 1), app.resetear_solo_contadores)
+        btn_reset_contadores.size_hint_y = None
+        btn_reset_contadores.height = dp(40)
+        self.contenido.add_widget(btn_reset_contadores)
+
+        self.lbl_crono = Label(text="00:00", font_size='30sp', size_hint_y=None, height=dp(50))
+        self.contenido.add_widget(self.lbl_crono)
+        
+class PantallaDos(PantallaBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)     
+        self.contenido.add_widget(
+            LabelConFondo(
+                text="GRÁFICO: DE IDA",
+                font_size='20sp',
+                size_hint_y=None,
+                bold=True,
+                height=dp(40),
+                color=(1, 0.5, 0, 1)))
+                
+        self.grafico = GraficoEvolucion("DE IDA", size_hint=(1, 1))
+        self.contenido.add_widget(self.grafico)
+
+        self.lbl_crono = Label(text="00:00", font_size='30sp', size_hint_y=None, height=dp(50))
+        self.contenido.add_widget(self.lbl_crono)
+
+    def on_pre_enter(self):
+        self.grafico.actualizar_grafico()
+
+class PantallaTres(PantallaBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.contenido.add_widget(
+            LabelConFondo(
+                text="GRÁFICO: DE VUELTA",
+                font_size='20sp',
+                bold=True,
+                size_hint_y=None,
+                height=dp(40),
+                color=(0, 0, 1, 1)))
+                
+        self.grafico = GraficoEvolucion("DE VUELTA", size_hint=(1, 1))
+        self.contenido.add_widget(self.grafico)
+
+        self.lbl_crono = Label(text="00:00", font_size='30sp', size_hint_y=None, height=dp(50))
+        self.contenido.add_widget(self.lbl_crono)
+
+    def on_pre_enter(self):
+        self.grafico.actualizar_grafico()
+       
+class PantallaRegistro(PantallaBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        app = App.get_running_app()
+
+        self.scroll = ScrollView(size_hint=(1, 1))
+        self.grid = GridLayout(cols=3, spacing=dp(5), size_hint_y=None)
+        self.grid.bind(minimum_height=self.grid.setter('height'))
+        self.scroll.add_widget(self.grid)
+        self.contenido.add_widget(self.scroll)
+
+        self.lbl_crono = Label(text="00:00", font_size='30sp', size_hint_y=None, height=dp(50))
+        self.contenido.add_widget(self.lbl_crono)
+
+        fila_crono = BoxLayout(orientation='horizontal', spacing=dp(10), size_hint=(1, None), height=dp(50))
+        btn_start = crear_boton("Iniciar", (0, 0.7, 0, 1), app.iniciar_cronometro)
+        btn_pause = crear_boton("Pausar", (0, 0.7, 0, 1), app.pausar_cronometro)
+        btn_reset = crear_boton("Reset", (0, 0.7, 0, 1), app.resetear_cronometro)
+        btn_resetR = crear_boton("Reset Reg", (0, 0.5, 0.8, 1), app.resetear_contadores)
+
+        for btn in (btn_start, btn_pause, btn_reset, btn_resetR):
+            btn.size_hint = (None, 1)
+            btn.width = dp(80)
+            fila_crono.add_widget(btn)
+
+        self.contenido.add_widget(fila_crono)
+        
+        btn_exportar = crear_boton("Exportar a TXT", (0, 0.5, 0.8, 1), app.exportar_registro)
+        btn_exportar.size_hint_y = None
+        btn_exportar.height = dp(50)
+        self.contenido.add_widget(btn_exportar)
+        
+        btn_salir = crear_boton("Salir", (0.7, 0, 0, 1), app.salir)
+        btn_salir.size_hint = (None, None)
+        btn_salir.width = dp(150)
+        btn_salir.height = dp(50)
+        self.contenido.add_widget(btn_salir)
+
+    def on_pre_enter(self):
+        app = App.get_running_app()
+        self.grid.clear_widgets()
+        
+        headers = ["HORA", "IDA", "VUELTA"]
+        for h in headers:
+            self.grid.add_widget(Label(text=h, bold=True, size_hint_y=None, height=dp(30), color=(1, 1, 0, 1)))
+            
+        totales = app.obtener_totales_por_hora()
+        horas_labels = ["7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+        
+        max_hour = min(app.segundos // 3600, len(horas_labels) - 1)
+        
+        for i in range(max_hour + 1):
+            hora_str = f"{horas_labels[i]}:00"
+            if i < len(horas_labels) - 1:
+                hora_str = f"{horas_labels[i]}:00 - {horas_labels[i+1]}:00"
+                
+            self.grid.add_widget(Label(text=hora_str, size_hint_y=None, height=dp(30)))
+            self.grid.add_widget(Label(text=str(totales.get(i, {}).get("DE IDA", 0)), size_hint_y=None, height=dp(30)))
+            self.grid.add_widget(Label(text=str(totales.get(i, {}).get("DE VUELTA", 0)), size_hint_y=None, height=dp(30)))
+
+
+# --- 6. LA APLICACIÓN ---
+class ContadorApp(App):
+    def build(self):
+        self.contadores = {}
+        self.labels = {}
+        self.historial_datos = {"DE IDA": [(0,0)], "DE VUELTA": [(0,0)]}
+        self.segundos = 0
+        self.cronometro_evento = None
+        
+        sm = ScreenManager(transition=NoTransition())
+        sm.add_widget(PantallaPrincipal(name="principal"))
+        sm.add_widget(PantallaDos(name="pantalla2"))
+        sm.add_widget(PantallaTres(name="pantalla3"))
+        sm.add_widget(PantallaRegistro(name="registro"))
+        return sm
+
+    def on_start(self):
+        if platform == 'android':
+            from android.permissions import request_permissions, Permission
+            request_permissions([
+                Permission.WRITE_EXTERNAL_STORAGE,
+                Permission.READ_EXTERNAL_STORAGE
+            ])
+
+    def crear_contador(self, nombre):
+        self.contadores[nombre] = 0
+        self.historial_datos[nombre] = [(0,0)]
+        lbl = Label(text="0", font_size='40sp')
+        self.labels[nombre] = lbl
+
+        fila = BoxLayout(orientation='horizontal', spacing=dp(10), size_hint_y=None, height=dp(60))
+        btn_menos = crear_boton("-", (0.7, 0.7, 0.7, 1), lambda x: self.cambiar(nombre, -1))
+        btn_mas = crear_boton("+", (0.7, 0.7, 0.7, 1), lambda x: self.cambiar(nombre, 1))
+        
+        fila.add_widget(btn_menos)
+        fila.add_widget(lbl)
+        fila.add_widget(btn_mas)
+        return fila
+
+    def cambiar(self, nombre, valor):
+        nuevo_valor = max(0, self.contadores.get(nombre, 0) + valor)
+        self.contadores[nombre] = nuevo_valor
+        if nombre in self.labels:
+            self.labels[nombre].text = str(nuevo_valor)
+            
+        if nombre in self.historial_datos:
+            hist = self.historial_datos[nombre]
+            if hist and hist[-1][0] == self.segundos:
+                hist[-1] = (self.segundos, nuevo_valor)
+            else:
+                hist.append((self.segundos, nuevo_valor))
+
+        self._actualizar_graficos_visibles()
+
+    def _actualizar_graficos_visibles(self):
+        if self.root.current in ["pantalla2", "pantalla3"]:
+            screen = self.root.get_screen(self.root.current)
+            if hasattr(screen, 'grafico'):
+                screen.grafico.actualizar_grafico()
+
+    def obtener_historial(self, nombre):
+        return self.historial_datos.get(nombre, [])
+
+    def obtener_totales_por_hora(self):
+        totales = {}
+        for i in range(13):
+            totales[i] = {"DE IDA": 0, "DE VUELTA": 0}
+            
+        for nombre in ["DE IDA", "DE VUELTA"]:
+            hist = self.historial_datos.get(nombre, [])
+            if not hist:
+                continue
+                
+            v_prev = 0
+            for t_seg, v_current in hist:
+                delta = v_current - v_prev
+                if v_current == 0 and delta < -1:
+                    delta = 0
+                elif v_current == 0 and delta == -1:
+                    delta = -1
+                    
+                indice_hora = min(t_seg // 3600, 12)
+                totales[indice_hora][nombre] += delta
+                v_prev = v_current
+                
+        for i in range(13):
+            for k in ["DE IDA", "DE VUELTA"]:
+                 totales[i][k] = max(0, totales[i][k])
+                 
+        return totales
+
+    def iniciar_cronometro(self, instance):
+        if not self.cronometro_evento:
+            self.cronometro_evento = Clock.schedule_interval(self.actualizar_crono, 1)
+
+    def actualizar_crono(self, dt):
+        self.segundos += 1
+        m, s = divmod(self.segundos, 60)
+        h, m = divmod(m, 60)
+        
+        if h > 0:
+            text = f"{h:02d}:{m:02d}:{s:02d}"
+        else:
+            text = f"{m:02d}:{s:02d}"
+        
+        for screen in self.root.screens:
+            if hasattr(screen, "lbl_crono"):
+                screen.lbl_crono.text = text
+                
+        if self.segundos % 10 == 0: 
+            for k in self.contadores:
+                val = self.contadores[k]
+                self.historial_datos[k].append((self.segundos, val))
+            self._actualizar_graficos_visibles()
+        
+    def pausar_cronometro(self, instance):
+        if self.cronometro_evento:
+            self.cronometro_evento.cancel()
+            self.cronometro_evento = None
+            
+    def resetear_cronometro(self, instance):
+        self.pausar_cronometro(instance)
+        self.segundos = 0
+        text = "00:00"
+        for screen in self.root.screens:
+            if hasattr(screen, "lbl_crono"):
+                screen.lbl_crono.text = text
+        
+        for k in self.historial_datos:
+            val = self.contadores.get(k, 0)
+            self.historial_datos[k] = [(0, val)]
+        self._actualizar_graficos_visibles()
+                
+    def resetear_contadores(self, instance):
+        for nombre in self.contadores:
+            self.contadores[nombre] = 0
+            if nombre in self.labels:
+                self.labels[nombre].text = "0"
+            self.historial_datos[nombre] = [(self.segundos, 0)]
+            
+        if hasattr(self, "lbl_registro"):
+            self.lbl_registro.text = ""            
+        self._actualizar_graficos_visibles()
+
+    def resetear_solo_contadores(self, instance):
+        for nombre in self.contadores:
+            self.contadores[nombre] = 0
+            if nombre in self.labels:
+                self.labels[nombre].text = "0"
+            if nombre in self.historial_datos:
+                hist = self.historial_datos[nombre]
+                if hist and hist[-1][0] == self.segundos:
+                    hist[-1] = (self.segundos, 0)
+                else:
+                    hist.append((self.segundos, 0))
+        self._actualizar_graficos_visibles()
+        
+    def salir(self, *args):
+        self.stop()
+        sys.exit()
+        return True
+    
+    def exportar_registro(self, instance=None):
+        try:
+            import datetime
+            fecha_hora = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            if platform == 'android':
+                from android.storage import primary_external_storage_path
+                dir_descargas = primary_external_storage_path() + "/Download"
+                ruta = dir_descargas + f"/registro_trafico_{fecha_hora}.txt"
+            else:
+                ruta = f"registro_{fecha_hora}.txt"
+            
+            with open(ruta, "w", encoding="utf-8") as f:
+                f.write("REGISTRO DE TRÁFICO - TOTALES POR HORA\n")
+                f.write("-" * 30 + "\n")
+                f.write(f"{'HORA':<15} | {'IDA':<10} | {'VUELTA':<10}\n")
+                f.write("-" * 30 + "\n")
+                
+                totales = self.obtener_totales_por_hora()
+                horas_labels = ["7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"]
+                max_hour = min(self.segundos // 3600, len(horas_labels) - 1)
+                
+                for i in range(max_hour + 1):
+                    hora_str = f"{horas_labels[i]}:00"
+                    if i < len(horas_labels) - 1:
+                        hora_str = f"{horas_labels[i]}:00-{horas_labels[i+1]}:00"
+                    
+                    ida = totales.get(i, {}).get("DE IDA", 0)
+                    vuelta = totales.get(i, {}).get("DE VUELTA", 0)
+                    
+                    f.write(f"{hora_str:<15} | {ida:<10} | {vuelta:<10}\n")
+                    
+                f.write("-" * 30 + "\n")
+                f.write("TOTALES ACUMULADOS ACTUALES:\n")
+                for k, v in self.contadores.items():
+                    f.write(f"{k.upper()}: {v}\n")
+
+            print(f"Archivo guardado en: {ruta}")
+            if platform == 'android':
+                self.compartir_archivo_android(ruta)
+        except Exception as e:
+            print("Error al exportar:", e)
+
+    def compartir_archivo_android(self, ruta_archivo):
+        try:
+            PythonActivity = autoclass('org.kivy.android.PythonActivity')
+            Intent = autoclass('android.content.Intent')
+            String = autoclass('java.lang.String')
+            Uri = autoclass('android.net.Uri')
+            StrictMode = autoclass('android.os.StrictMode')
+            builder = autoclass('android.os.StrictMode$VmPolicy$Builder')()
+            StrictMode.setVmPolicy(builder.build())
+            activity = PythonActivity.mActivity
+            intent = Intent(Intent.ACTION_SEND)
+            intent.setType("text/plain")
+            try:
+                with open(ruta_archivo, "r", encoding="utf-8") as f:
+                    texto = f.read()
+                intent.putExtra(Intent.EXTRA_TEXT, String(texto))
+            except:
+                pass
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            titulo = cast('java.lang.CharSequence', String("Compartir registro"))
+            chooser = Intent.createChooser(intent, titulo)
+            activity.startActivity(chooser)
+        except Exception as e:
+            print("Error crítico al compartir:", e)
+            try:
+                from kivy.uix.popup import Popup
+                from kivy.uix.label import Label
+                import traceback
+                error_txt = str(e) + "\n" + traceback.format_exc()[-200:]
+                lbl = Label(text=error_txt, font_size='12sp')
+                lbl.bind(size=lbl.setter('text_size'))
+                Popup(title="Error de Compartir", content=lbl, size_hint=(0.9, 0.5)).open()
+            except:
+                pass
+
+if __name__ == "__main__":
+    ContadorApp().run()
